@@ -48,3 +48,24 @@ durch und gibt Familien-IDs aus.
 
 Ausgegeben werden nur Monster, Stats und Runen. Wizard-ID, Name, Freundesliste,
 Chat- und Kaufdaten aus dem Export landen **nicht** im Auszug.
+
+## toa_advisor.py
+
+Verbindet den SWEX-Export mit der SWARFARM-Bestiary und markiert je Monster die
+Faehigkeiten, auf die es im Turm der Pruefung ankommt (Schaden ueber Zeit,
+Heilung, Reinigung, Immunitaet, Angriffsleiste, Verteidigungsbruch, Kontrolle).
+
+```
+git clone --depth 1 https://github.com/swarfarm/swarfarm
+python toa_advisor.py <swex.json> --bestiary swarfarm/bestiary/fixtures/bestiary_data.json
+```
+
+Die Bestiary liefert auch eine vollstaendige Namensliste fuer `--names`:
+
+```python
+import json
+d = json.load(open("bestiary_data.json", encoding="utf-8"))
+json.dump({str(x["fields"]["com2us_id"]): x["fields"]["name"]
+           for x in d if x["model"] == "bestiary.monster"},
+          open("names.json", "w"), ensure_ascii=False)
+```
