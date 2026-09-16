@@ -69,3 +69,16 @@ json.dump({str(x["fields"]["com2us_id"]): x["fields"]["name"]
            for x in d if x["model"] == "bestiary.monster"},
           open("names.json", "w"), ensure_ascii=False)
 ```
+
+## rune_swap.py
+
+Sucht die beste einzelne Runen-Umbelegung fuer ein Monster: probiert jede freie
+Rune gegen die angelegte Rune desselben Slots, prueft Mindestwerte und haelt
+die aktiven Sets.
+
+```
+python rune_swap.py <swex.json> --names names.json --unit Veromos \
+    --maximize HP --min-spd 175 --keep-set Violent
+```
+
+`--slot N --assume-empty` rechnet einen bereits abgenommenen Slot neu durch.

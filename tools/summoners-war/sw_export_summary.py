@@ -31,6 +31,18 @@ EFFECTS = {
     8: "SPD", 9: "CR%", 10: "CD%", 11: "RES%", 12: "ACC%",
 }
 
+# Aktive Set-Boni: Set -> (Stat, Wert). Prozentwerte werden wie Runen-Prozente
+# auf den Basiswert gerechnet, Punktwerte (CR/CD/ACC/RES) direkt addiert.
+SET_BONUS = {
+    "Energy": ("HP%", 15), "Guard": ("DEF%", 15), "Swift": ("SPD%", 25),
+    "Blade": ("CR", 12), "Rage": ("CD", 40), "Focus": ("ACC", 20),
+    "Endure": ("RES", 20), "Fatal": ("ATK%", 35),
+    "Accuracy": ("ACC", 10), "Tolerance": ("RES", 10),
+}
+# Sets, die 4 Runen brauchen; alle uebrigen sind 2er-Sets.
+FOUR_PIECE = {"Violent", "Swift", "Rage", "Fatal", "Despair", "Vampire",
+              "Destroy", "Seal", "Intangible"}
+
 QUALITY = {1: "Normal", 2: "Magic", 3: "Rare", 4: "Hero", 5: "Legend",
            11: "Normal+", 12: "Magic+", 13: "Rare+", 14: "Hero+", 15: "Legend+"}
 
@@ -164,13 +176,26 @@ def effective_stats(unit):
         "RES": unit.get("resist", 0) or 0,
         "ACC": unit.get("accuracy", 0) or 0,
     }
+    runes = unit_runes(unit)
     flat, pct = {}, {}
-    for rune in unit_runes(unit):
+    for rune in runes:
         f, p = rune_stats(rune)
         for k, v in f.items():
             flat[k] = flat.get(k, 0) + v
         for k, v in p.items():
             pct[k] = pct.get(k, 0) + v
+
+    for set_name in active_sets(runes):
+        bonus = SET_BONUS.get(set_name)
+        if not bonus:
+            continue
+        stat, value = bonus
+        if stat == "SPD%":
+            flat["SPD"] = flat.get("SPD", 0) + round(base["SPD"] * value / 100.0)
+        elif stat.endswith("%"):
+            pct[stat] = pct.get(stat, 0) + value
+        else:
+            pct[stat + "%"] = pct.get(stat + "%", 0) + value
 
     out = dict(base)
     for key, fkey, pkey in (("HP", "HP+", "HP%"), ("ATK", "ATK+", "ATK%"),
@@ -184,20 +209,21 @@ def effective_stats(unit):
     return out
 
 
-def equipped_sets(unit):
-    """Aktive Runensets als lesbarer String, z.B. 'Violent/Will'."""
+def active_sets(runes):
+    """Aktive Sets als Liste, z.B. ['Violent', 'Focus']."""
     counts = {}
-    for rune in unit_runes(unit):
+    for rune in runes:
         name = RUNE_SETS.get(rune.get("set_id"), "?")
         counts[name] = counts.get(name, 0) + 1
-    four = {"Violent", "Swift", "Rage", "Fatal", "Despair", "Vampire",
-            "Destroy", "Rage", "Seal", "Intangible"}
     active = []
     for name, cnt in sorted(counts.items(), key=lambda kv: -kv[1]):
-        need = 4 if name in four else 2
-        for _ in range(cnt // need):
-            active.append(name)
-    return "/".join(active) if active else "-"
+        need = 4 if name in FOUR_PIECE else 2
+        active.extend([name] * (cnt // need))
+    return active
+
+
+def equipped_sets(unit):
+    return "/".join(active_sets(unit_runes(unit))) or "-"
 
 
 def natural_stars(unit):
