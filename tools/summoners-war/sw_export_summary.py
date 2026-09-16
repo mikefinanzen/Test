@@ -206,9 +206,86 @@ def natural_stars(unit):
     return unit.get("class", 0)
 
 
+
+# ---------------------------------------------------------------- Auto-Suche
+
+SKIP_DIRS = {"node_modules", ".git", "AppData", "Windows", "Program Files",
+             "Program Files (x86)", "$Recycle.Bin", "System Volume Information",
+             "Library", "proc", "sys"}
+
+
+def looks_like_swex(path):
+    """Billiger Test: enthaelt die Datei einen SWEX-Export?"""
+    try:
+        if os.path.getsize(path) < 50_000:
+            return False
+        with open(path, "rb") as fh:
+            head = fh.read(4096)
+        return b'"unit_list"' in head or b'"wizard_info"' in head
+    except OSError:
+        return False
+
+
+def candidate_roots():
+    home = os.path.expanduser("~")
+    roots = [os.path.join(home, d) for d in
+             ("Documents", "Dokumente", "Downloads", "Desktop", "Schreibtisch",
+              "OneDrive", "SWExporter", "swarfarm")]
+    roots.append(home)
+    roots.append(os.getcwd())
+    for drive in ("C:\\", "D:\\"):
+        for sub in ("SWEX", "Summoners War Exporter", "Tools\\SWEX"):
+            roots.append(os.path.join(drive, sub))
+    seen, out = set(), []
+    for root in roots:
+        real = os.path.abspath(root)
+        if real not in seen and os.path.isdir(real):
+            seen.add(real)
+            out.append(real)
+    return out
+
+
+def find_swex_json(max_depth=3):
+    """Neuesten SWEX-Export in den ueblichen Ordnern suchen."""
+    found = []
+    for root in candidate_roots():
+        base_depth = root.rstrip(os.sep).count(os.sep)
+        for dirpath, dirnames, filenames in os.walk(root):
+            if dirpath.rstrip(os.sep).count(os.sep) - base_depth >= max_depth:
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames
+                           if d not in SKIP_DIRS and not d.startswith(".")]
+            for name in filenames:
+                if not name.lower().endswith(".json"):
+                    continue
+                full = os.path.join(dirpath, name)
+                if looks_like_swex(full):
+                    found.append((os.path.getmtime(full), full))
+    if not found:
+        return None
+    found.sort(reverse=True)
+    return found[0][1]
+
+
+def copy_to_clipboard(text):
+    """Report in die Zwischenablage legen (Windows / macOS / Linux)."""
+    import subprocess
+    for cmd in (["clip"], ["pbcopy"], ["xclip", "-selection", "clipboard"],
+                ["wl-copy"]):
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+            proc.communicate(text.encode("utf-8", errors="replace"))
+            if proc.returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
+
+
 # ---------------------------------------------------------------- Report
 
-def build_report(data, names, top_runes=15):
+def build_report(data, names, top_runes=15, max_monsters=40):
     out = []
     w = out.append
 
@@ -238,10 +315,15 @@ def build_report(data, names, top_runes=15):
     ranked = sorted(rows, key=lambda r: (-r["runes"], -r["stars"], -r["s"]["SPD"]))
     geared = [r for r in ranked if r["runes"] >= 4]
 
+    by_speed = sorted(geared, key=lambda r: -r["s"]["SPD"])
+    shown = by_speed[:max_monsters]
     w("--- EINSATZFAEHIGE MONSTER (>=4 Runen), sortiert nach Speed ---")
+    if len(by_speed) > len(shown):
+        w("(Top %d von %d - mit --max-monsters N erweiterbar)"
+          % (len(shown), len(by_speed)))
     w("%-22s %-7s %-3s %-4s %5s %6s %5s %4s %4s %4s %4s  %s" % (
         "Monster", "Element", "*", "Lvl", "SPD", "HP", "ATK", "DEF", "CR", "CD", "ACC", "Sets"))
-    for r in sorted(geared, key=lambda r: -r["s"]["SPD"]):
+    for r in shown:
         s = r["s"]
         w("%-22s %-7s %-3d %-4d %5d %6d %5d %4d %4d %4d %4d  %s" % (
             r["name"] + ("*" if r["awakened"] else ""), r["element"], r["stars"],
@@ -306,29 +388,57 @@ def build_report(data, names, top_runes=15):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("json_file", help="SWEX-Export (*.json)")
+    ap.add_argument("json_file", nargs="?",
+                    help="SWEX-Export (*.json); entfaellt bei --auto")
+    ap.add_argument("--auto", action="store_true",
+                    help="SWEX-Export automatisch in den ueblichen Ordnern suchen")
+    ap.add_argument("--clip", action="store_true",
+                    help="Auszug zusaetzlich in die Zwischenablage legen")
     ap.add_argument("-o", "--out", help="Ausgabedatei (Standard: Konsole)")
     ap.add_argument("--names", help="Eigene Namensliste (JSON: id -> Name)")
     ap.add_argument("--names-url", help="Alternative Quelle fuer die Namensliste")
     ap.add_argument("--offline", action="store_true",
                     help="Keine Namen aus dem Netz laden")
+    ap.add_argument("--max-monsters", type=int, default=40,
+                    help="Wie viele gerunte Monster gelistet werden (Standard 40)")
     ap.add_argument("--top-runes", type=int, default=15,
                     help="Wie viele Top-Runen je Kategorie (Standard 15)")
     args = ap.parse_args()
 
-    with open(args.json_file, encoding="utf-8") as fh:
+    path = args.json_file
+    if not path or args.auto:
+        print("Suche SWEX-Export ...", file=sys.stderr)
+        path = find_swex_json() or path
+        if path:
+            print("Gefunden: %s" % path, file=sys.stderr)
+    if not path:
+        print("Kein SWEX-Export gefunden. Bitte den Pfad zur JSON-Datei "
+              "direkt angeben:\n  python sw_export_summary.py <datei.json>",
+              file=sys.stderr)
+        return 2
+
+    with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
 
     names = load_name_map(args.names, args.offline, args.names_url)
-    report = build_report(data, names, args.top_runes)
+    report = build_report(data, names, args.top_runes, args.max_monsters)
 
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
             fh.write(report + "\n")
-        print("Auszug geschrieben: %s" % args.out)
+        print("Auszug geschrieben: %s" % os.path.abspath(args.out))
     else:
         print(report)
 
+    if args.clip:
+        if copy_to_clipboard(report):
+            print("Auszug liegt in der Zwischenablage - im Chat einfach "
+                  "mit Strg+V einfuegen.")
+        else:
+            print("Zwischenablage nicht verfuegbar - bitte die Datei oeffnen "
+                  "und den Inhalt kopieren.")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
